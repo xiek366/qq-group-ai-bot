@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 环境变量
+.env
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# ── 运行时数据（群聊记录 / 画像 / 表情包 / 缓存 / 统计）──
+# 里面有群友的 QQ 号、昵称与聊天内容，属于隐私数据，绝不入库
+# 详细同步规则见 DEPLOY_SYNC.md
+data/
+tests/data/
+
+# ── 本地排查脚本（只在 Windows 本机用）──
+# 注意：_test_token.py 里有明文 OneBot token，绝不能提交
+# 用 / 开头锚定到根目录，避免误伤 app/**/__init__.py
+/_*.py
+/_*.bat
+
+# ── 日志与临时目录 ──
+*.log
+.tmp_pip/
+.deps_verify/
+.pipout.txt
+
+# ── 设计/需求文档（Word 二进制，GitHub 文本接口无法处理；不入库）──
+*.docx
