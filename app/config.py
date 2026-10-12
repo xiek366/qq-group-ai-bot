@@ -191,6 +191,12 @@ class Config:
     # 只推这么新的条目（小时）；太旧的不推，避免"补发上周的新闻"
     NEWS_MAX_AGE_HOURS: int = int(os.getenv("NEWS_MAX_AGE_HOURS", "48"))
     NEWS_IMAGE_MAX_MB: float = float(os.getenv("NEWS_IMAGE_MAX_MB", "8"))
+    # COLG 论坛源（bbs.colg.cn，HTML 解析，无 RSS）：质量闸 = 回复≥N 或 浏览≥M（都低才丢）
+    # FIDS 留空 = 预置 171（国服心情咖啡屋）；要加韩版填 "171,170"
+    NEWS_COLG_ENABLED: bool = os.getenv("NEWS_COLG_ENABLED", "true").lower() == "true"
+    NEWS_COLG_FIDS: str = os.getenv("NEWS_COLG_FIDS", "")
+    NEWS_COLG_MIN_REPLIES: int = int(os.getenv("NEWS_COLG_MIN_REPLIES", "5"))
+    NEWS_COLG_MIN_VIEWS: int = int(os.getenv("NEWS_COLG_MIN_VIEWS", "500"))
     # 任务时刻：资讯 11:30 / 每日一句 12:30 / 每日一图 19:30（错开，别挤在一起）
     NEWS_DIGEST_AT: str = os.getenv("NEWS_DIGEST_AT", "11:30")
     DAILY_QUOTE_AT: str = os.getenv("DAILY_QUOTE_AT", "12:30")

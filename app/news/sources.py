@@ -281,6 +281,148 @@ PRESET_BILI = (
 )
 
 
+# ===== COLG 论坛（bbs.colg.cn，DNF 玩家社区）=====
+# 站方关闭了 Discuz 自带 RSS（forum.php?mod=rss → "RSS Disabled"），只能走 HTML 解析。
+# 板块页（forum-<fid>-1.html）是服务端渲染的 Discuz 列表，含 回复/浏览 数 —— 正好用来做质量过滤。
+# 实测（2026-10-12）：fid=171 国服心情咖啡屋 中位回复 60 / 浏览 3125；
+#                    fid=170 韩版搬运区 回复中位数 0，全是短问答 → 默认不启用。
+COLG_DEFAULT_FIDS = (171,)   # 171 = DNF心情咖啡屋（国服主讨论区）
+COLG_DISPLAY = "COLG论坛"
+
+_TBODY_RE = re.compile(r'<tbody id="normalthread_(\d+)"[^>]*>(.*?)</tbody>', re.S)
+
+
+def _to_int(s: str) -> int:
+    """"1,234" / "3.2万" → int（COLG 数字列带逗号，浏览量可能给"万"）"""
+    s = (s or "").replace(",", "").strip()
+    if s.endswith("万"):
+        try:
+            return int(float(s[:-1]) * 10000)
+        except ValueError:
+            return 0
+    return int(s) if s.isdigit() else 0
+
+
+def parse_colg_forum(html: str, *, limit: int = 25, now: Optional[float] = None) -> list[dict]:
+    """COLG 板块页 HTML → [{tid,title,link,pub,replies,views}]（纯函数，可离线测试）
+
+    只解析 `normalthread_` tbody（stickthread_ 是置顶公告，不当资讯推）。
+    时间取 dbdateline（Unix 秒，thread_<tid>_new_show 锚点上）；官方活动帖会把
+    dbdateline 写成未来时间（活动结束时间），pub > now 的按"首见时间"兜底。
+    解析不出时间的同样用 now 兜底 —— 48h 新鲜度线按首见算，指纹去重保证一条只推一次。
+    """
+    now = now if now is not None else time.time()
+    out: list[dict] = []
+    for m in _TBODY_RE.finditer(html):
+        tid, block = m.group(1), m.group(2)
+        # 标题：th 里指向本帖的链接（跳过纯数字文本 = num 列的回复数链接）
+        title = ""
+        for am in re.finditer(
+                r'<a[^>]+href="(?:thread-' + tid + r'-\d+-\d+\.html|[^"]*viewthread&amp;tid=' +
+                tid + r')[^"]*"[^>]*>((?:<[^>]+>)*)([^<]{4,160})', block):
+            cand = am.group(2).strip()
+            if cand and not cand.replace(",", "").isdigit():
+                title = cand
+                break
+        if not title:
+            continue
+        # 发表时间：优先 dbdateline Unix 秒；否则 by 列的 "2026-5-18 15:56" 字符串
+        pub = 0.0
+        dm = re.search(r'dbdateline="(\d{10})"', block)
+        if dm:
+            pub = float(dm.group(1))
+        else:
+            bm = re.search(
+                r'<td class="by">.*?<em[^>]*>(?:<span[^>]*>)?(\d{4})-(\d{1,2})-(\d{1,2})'
+                r'(?:\s+(\d{1,2}):(\d{2}))?', block, re.S)
+            if bm:
+                y, mo, d = int(bm.group(1)), int(bm.group(2)), int(bm.group(3))
+                hh, mi = int(bm.group(4) or 12), int(bm.group(5) or 0)
+                try:
+                    pub = time.mktime((y, mo, d, hh, mi, 0, 0, 0, -1))
+                except (OverflowError, ValueError):
+                    pub = 0.0
+        if pub > now + 3600:          # 未来时间戳（活动帖套路）→ 不可信，用首见时间
+            pub = 0.0
+        # 回复/浏览：num 列 <a>回复数</a><em>浏览数</em>
+        replies = views = 0
+        nm = re.search(
+            r'<td class="num">\s*<a[^>]*>([\d,万.]+)</a>\s*(?:<em[^>]*>([\d,万.]+)</em>)?', block)
+        if nm:
+            replies = _to_int(nm.group(1))
+            views = _to_int(nm.group(2)) if nm.group(2) else 0
+        out.append({
+            "tid": tid, "title": title[:160],
+            "link": f"https://bbs.colg.cn/thread-{tid}-1-1.html",
+            "pub": pub if pub > 0 else now,
+            "replies": replies, "views": views,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+class ColgSource:
+    """COLG 论坛源（HTML 解析 + 质量过滤）
+
+    质量过滤（用户要求 2026-10-12）：论坛灌水帖多，用板块页自带的 回复/浏览 数挡掉
+    低质帖 —— 回复和浏览是"或"的关系（0 回复但 5000 浏览的围观帖有价值，
+    20 回复但 100 浏览的小圈子讨论也有价值），两个都低才丢。
+    """
+
+    source_id = "colg"
+    display_name = COLG_DISPLAY
+
+    def __init__(self, fids, min_replies: int = 5, min_views: int = 500,
+                 client: Optional[httpx.AsyncClient] = None, limit: int = 25):
+        self.fids = [int(f) for f in fids] or list(COLG_DEFAULT_FIDS)
+        self.min_replies = max(0, int(min_replies))
+        self.min_views = max(0, int(min_views))
+        self._client = client
+        self._limit = limit
+
+    async def fetch(self, *, etag: str = "", last_modified: str = ""):
+        """依次抓各板块第一页（Discuz 动态页不支持 ETag 条件请求，冷却由 service 层管）"""
+        collected: list[NewsItem] = []
+        client = self._client or httpx.AsyncClient(timeout=Config.HTTP_TIMEOUT, follow_redirects=True)
+        try:
+            for fid in self.fids:
+                url = f"https://bbs.colg.cn/forum-{fid}-1.html"
+                try:
+                    resp = await client.get(url, headers={"User-Agent": BROWSER_UA})
+                    if resp.status_code != 200:
+                        logger.warning(f"[News] colg fid={fid} HTTP {resp.status_code}")
+                        continue
+                    rows = parse_colg_forum(resp.text, limit=self._limit)
+                except httpx.TimeoutException:
+                    logger.warning(f"[News] colg fid={fid} 请求超时")
+                    continue
+                except Exception as e:
+                    logger.warning(f"[News] colg fid={fid} 解析失败: {e}")
+                    continue
+                for row in rows:
+                    # 质量闸：回复、浏览都低于阈值 → 丢弃（低质灌水帖）
+                    if row["replies"] < self.min_replies and row["views"] < self.min_views:
+                        continue
+                    collected.append(NewsItem(
+                        source=COLG_DISPLAY, source_id=self.source_id,
+                        title=row["title"], link=row["link"], pub_time=row["pub"],
+                        image="", category=f"fid{fid}", summary="",
+                        guid=f"colg{row['tid']}",
+                    ))
+            logger.info(f"[News] colg 解析到 {len(collected)} 条（质量闸 回复≥{self.min_replies} 或 浏览≥{self.min_views}）")
+            return collected, "", "", False
+        except Exception as e:
+            logger.warning(f"[News] colg 拉取失败: {e}")
+            return [], "", "", False
+        finally:
+            if self._client is None:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+
+
 def build_sources(client: Optional[httpx.AsyncClient] = None, limit: int = 20) -> list:
     """按配置造源列表（可用 NEWS_RSS_SOURCES / NEWS_BILI_MIDS 覆盖或裁剪）"""
     out: list = []
@@ -296,5 +438,17 @@ def build_sources(client: Optional[httpx.AsyncClient] = None, limit: int = 20) -
         if want_bili and mid not in want_bili:
             continue
         out.append(BilibiliArticleSource(mid, name, client=client, limit=limit))
+
+    # COLG 论坛（HTML 解析源）：NEWS_COLG_FIDS 留空 = 预置板块（国服咖啡屋）；
+    # 填了 = 只用填的 fid（如 "171,170"），NEWS_COLG_ENABLED=false 整体关闭
+    if Config.NEWS_COLG_ENABLED:
+        fids = [f.strip() for f in (Config.NEWS_COLG_FIDS or "").replace("，", ",").split(",")
+                if f.strip().isdigit()]
+        out.append(ColgSource(
+            fids or COLG_DEFAULT_FIDS,
+            min_replies=Config.NEWS_COLG_MIN_REPLIES,
+            min_views=Config.NEWS_COLG_MIN_VIEWS,
+            client=client, limit=25,
+        ))
 
     return out
