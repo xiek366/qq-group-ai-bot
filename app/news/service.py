@@ -9,9 +9,11 @@
   **启动后第一次 `refresh` 会依次串行拉取**（不并发，避免 B站风控）；
 - **条件请求**：缓存 ETag/Last-Modified，多数请求应返回 304（几 KB 而已）；
 - **降级**：单源失败 → 换下一个源；全部失败 → 返回空 → 调用方**本次不发**（绝不发占位内容）；
-- **去重**：按 `NewsItem.fingerprint` 记"已推送"，跨天不重复推同一条（A.6 要求）。
+- **去重**：按 `NewsItem.fingerprint` 记"已推送"，跨天不重复推同一条（A.6 要求）；
+- **来源轮换**（2026-10-12）：选条时优先避开最近推送过的来源——机核日更多篇、
+  全带图，"全局最新优先"会让它垄断资讯与每日一图（实测 48h 候选池里机核占 91%）。
 
-状态落 `data/news/state.json`（源冷却/退避/ETag + 已推送指纹），进程重启也不丢。
+状态落 `data/news/state.json`（源冷却/退避/ETag + 已推送指纹 + 最近推送来源），进程重启也不丢。
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from app.paths import NEWS_CACHE_DIR, ensure_dir
 logger = logging.getLogger(__name__)
 
 _MAX_SEEN = 600          # 已推送指纹最多记这么多（够跨天去重，别让状态文件长太大）
+_MAX_RECENT_SOURCES = 10  # 最近推送来源最多记这么多（轮换避让只看最近 2 条）
 
 
 class NewsService:
@@ -44,6 +47,7 @@ class NewsService:
         self._lock = threading.RLock()
         self._states: dict[str, SourceState] = {}
         self._seen: list[str] = []
+        self._recent_sources: list[str] = []   # 最近推送的来源（来源轮换用）
         self._items: list[NewsItem] = []
         self._loaded = False
         self._last_refresh = 0.0
@@ -65,6 +69,7 @@ class NewsService:
                         setattr(s, k, v)
                 self._states[sid] = s
             self._seen = list(raw.get("seen") or [])
+            self._recent_sources = list(raw.get("recent_sources") or [])
             # 【P2c-hotfix-2】条目也要恢复：原来只落盘"冷却状态"，重启后条目是空的，
             # 而冷却还没过 → 一个源都不拉 → 手里 0 条 → 任务报"没有可推的新资讯"（线上踩到）
             for it in (raw.get("items") or []):
@@ -84,6 +89,7 @@ class NewsService:
                 "items_seen": s.items_seen,
             } for sid, s in self._states.items()},
             "seen": self._seen[-_MAX_SEEN:],
+            "recent_sources": self._recent_sources[-_MAX_RECENT_SOURCES:],
             # 只存最近的若干条（去重用的 seen 已经单独存了，这里够选条就行）
             "items": [self._to_dict(i) for i in self._items[:100]],
         }
@@ -201,12 +207,28 @@ class NewsService:
         if not items:
             return None
         plain = [i for i in items if not i.has_image]
-        return (plain or items)[0]
+        return self._prefer_other_sources(plain or items)[0]
 
     def pick_image_item(self, *, now: Optional[float] = None) -> Optional[NewsItem]:
         """每日一图用：必须带图，且尽量新"""
         items = self.fresh_items(need_image=True, limit=10, now=now)
-        return items[0] if items else None
+        return self._prefer_other_sources(items)[0] if items else None
+
+    def _prefer_other_sources(self, items: list[NewsItem]) -> list[NewsItem]:
+        """来源轮换：优先返回「最近 2 次没推过」的来源的条目（保持时间倒序）。
+
+        背景（2026-10-12 实测）：机核日更多篇且全带图，"全局最新优先"会让它
+        占据 ~91% 的推送位；B站专栏周更、游研社 feed 更新慢，完全没有出场机会。
+        避让窗口取最近 2 次：机核最多连发 2 条就让位，其余源有新鲜内容时优先出场；
+        其余源没有新内容时自然回落机核（它本来就是产量主力，不算委屈）。
+        """
+        if len(items) <= 1:
+            return items
+        avoid = set(self._recent_sources[-2:])
+        if not avoid:
+            return items
+        others = [i for i in items if i.source_id not in avoid]
+        return others or items
 
     def mark_pushed(self, *items: NewsItem) -> None:
         self._load()
@@ -215,7 +237,11 @@ class NewsService:
                 fp = it.fingerprint
                 if fp not in self._seen:
                     self._seen.append(fp)
+                # 记录来源供轮换避让（同一条重复标记不重复计）
+                if not self._recent_sources or self._recent_sources[-1] != it.source_id:
+                    self._recent_sources.append(it.source_id)
             self._seen = self._seen[-_MAX_SEEN:]
+            self._recent_sources = self._recent_sources[-_MAX_RECENT_SOURCES:]
         self.save()
 
     # ---------- 展示 ----------

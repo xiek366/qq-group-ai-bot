@@ -503,6 +503,7 @@ class MessageHandler:
         # 4) /问 xxx
         if command in ("/ask", "/问", "/question"):
             await self._handle_chat(group_id, parsed, trigger="ask")
+            return  # 修复：原来漏了 return，会继续走到 _maybe_casual_reply 造成双回复
 
         # /看 —— 看图专用命令（手机端不用 @ 机器人）
         if command in ("/看", "/look", "/看图", "/看看", "/view"):
@@ -1285,6 +1286,9 @@ class MessageHandler:
 
         # 5. 发送（自动 @ 群成员）
         reply = await self._auto_mention(group_id, reply)
+        # 正式回复也占用主动插嘴的 60 秒冷却：不然 /问、@bot 刚回完，
+        # 下一条普通消息又立刻按概率插嘴，Bot 会显得话痨
+        self._last_bot_reply_time[group_id] = time.time()
         await self._send_group(group_id, reply)
 
     # ---------- 搜索 ----------
