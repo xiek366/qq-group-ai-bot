@@ -114,5 +114,7 @@ class DailyImageTask(Task):
         lines = [to_cq_image(Path(path))]
         if caption:
             lines.append(caption)
-        self.service.mark_pushed(item)
+        # 干跑（/任务 试跑）不记指纹——不烧图鉴库存，正式执行才标记
+        if not ctx.dry_run:
+            self.service.mark_pushed(item)
         return ["\n".join(lines)]

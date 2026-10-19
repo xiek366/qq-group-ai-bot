@@ -123,5 +123,7 @@ class NewsDigestTask(Task):
                 parts.append(to_cq_image(path))
 
         parts.append(format_news(item, comment))
-        self.service.mark_pushed(item)
+        # 干跑（/任务 试跑）不记指纹——不烧推送库存，正式执行才标记
+        if not ctx.dry_run:
+            self.service.mark_pushed(item)
         return ["\n".join(parts)]

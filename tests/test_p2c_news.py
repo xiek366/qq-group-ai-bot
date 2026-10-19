@@ -464,6 +464,18 @@ async def test_news_digest_task():
     assert seen["item"] is item
     assert svc.has_pushed(item), "推过的要记指纹（跨天去重）"
 
+    # 干跑（ctx.dry_run=True）：生成内容但不记指纹——不烧推送库存
+    item_dry = _item(title="干跑专用条目", link="https://x/2", source="机核", sid="gcores")
+    svc._items.append(item_dry)
+    parts_dry = await task.render(TaskContext(group_id=GID, now=0.0, dry_run=True,
+                                              config={}, group_config={}))
+    assert "干跑专用条目" in parts_dry[0], parts_dry[0]
+    assert not svc.has_pushed(item_dry), "干跑不得消耗推送库存"
+
+    # 再跑一次（非干跑）：干跑条目还在池里 → 正常选中并记指纹
+    parts_again = await task.render(TaskContext(group_id=GID, now=0.0, config={}, group_config={}))
+    assert "干跑专用条目" in parts_again[0], parts_again[0]
+    assert svc.has_pushed(item_dry), "正式执行要记指纹"
     # 再跑一次：没有新条目 → TaskSkip
     try:
         await task.render(TaskContext(group_id=GID, now=0.0, config={}, group_config={}))
@@ -515,6 +527,13 @@ async def test_daily_image_task():
     task3 = DailyImageTask(svc3, fetcher=fetcher, captioned=lambda it: _ret(""))
     parts3 = await task3.render(TaskContext(group_id=GID, now=0.0, config={}, group_config={}))
     assert parts3[0].startswith("[CQ:image") and "\n" not in parts3[0], parts3[0]
+    # 干跑（ctx.dry_run=True）：出图但不记指纹——不烧图鉴库存
+    item_dry = _item(title="干跑壁纸", link="https://x/12", img="https://x/12.jpg")
+    svc3._items.append(item_dry)
+    parts_d = await task3.render(TaskContext(group_id=GID, now=0.0, dry_run=True,
+                                             config={}, group_config={}))
+    assert "[CQ:image" in parts_d[0], parts_d[0]
+    assert not svc3.has_pushed(item_dry), "干跑不得消耗图鉴库存"
     print("   每日一图：纯美图（图 + 一句配文，无标题/来源/链接）；配文失败发纯图；取不到图 → 跳过")
     print("✅ test_daily_image_task PASS")
 

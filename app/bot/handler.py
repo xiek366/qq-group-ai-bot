@@ -813,7 +813,8 @@ class MessageHandler:
         item = self.news.pick_for_digest(exclude_source_ids=self._gallery_ids)
         if item is None:
             return ""
-        self.news.mark_pushed(item)
+        if not ctx.dry_run:
+            self.news.mark_pushed(item)
         hook = "有人关注这个吗？"
         if item.link:
             return f"刚刷到一条：{item.title}\n{hook}\n{item.link}"
@@ -1434,7 +1435,7 @@ class MessageHandler:
         if name not in self.scheduler.tasks:
             return f"没有这个任务：{name}（可用：{', '.join(sorted(self.scheduler.tasks))}）"
         res = await self.scheduler.run_task(name, group_id, dry_run=dry_run, force=force)
-        head = f"🧪 试跑 {name}" if dry_run else f"🚀 立即执行 {name}"
+        head = f"🧪 试跑 {name}（不消耗推送库存）" if dry_run else f"🚀 立即执行 {name}"
         if res.status == "dry_run":
             body = "\n\n".join(res.parts) if res.parts else "（没有生成内容）"
             return f"{head}（未发送）· {res.elapsed:.2f}s\n————\n{body}"
