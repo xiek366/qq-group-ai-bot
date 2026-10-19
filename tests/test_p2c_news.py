@@ -559,7 +559,19 @@ async def test_gallery_split():
     parts = await task.render(TaskContext(group_id=GID, now=0.0, config={}, group_config={}))
     assert parts[0].startswith("[CQ:image"), parts[0][:60]
     assert "某作新图公开" in parts[0] and "来源：机核" in parts[0], parts[0]
-    print("   分拣：资讯排除图鉴 / 图位图鉴优先 / 耗尽回落 / 资讯带图封面 全通过")
+    # 6) 【截断竞争回归】机核 10 条更新 + 图鉴 1 条稍旧 → prefer 仍必须选中图鉴
+    #    （旧版先按时间截断前 10 再 prefer，图鉴条目被挤出候选池 → 永远回落机核）
+    crowd = [_item(title=f"机核快讯{i}", link=f"https://x/n{i}", img=f"https://x/n{i}.jpg",
+                   source="机核", sid="gcores", hours_ago=1.0 + i * 0.5) for i in range(10)]
+    older_gal = _item(title="Pixiv美图#350", link="https://bilibili.com/read/cv350",
+                      img="https://i0.hdslb.com/350.png", source="B站·难改狐言",
+                      sid="bili_64090032", hours_ago=15.4)
+    svc3 = NewsService(sources=[StubSource("s3", crowd + [older_gal])],
+                       state_path=tmp / "s3.json")
+    await svc3.refresh()
+    it4 = svc3.pick_image_item(prefer_source_ids={"bili_2024069799", "bili_64090032"})
+    assert it4 is older_gal, f"图鉴优先必须无视时间截断，实际 {it4 and it4.title}"
+    print("   截断竞争：10 条机核新帖也挤不掉 15h 前的图鉴帖 ✅")
     print("✅ test_gallery_split PASS")
 
 

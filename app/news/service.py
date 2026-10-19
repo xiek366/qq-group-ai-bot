@@ -208,7 +208,7 @@ class NewsService:
         直接排除出资讯流（壁纸合集当资讯没意义，专属每日一图）；
         排除后池子空了就返回 None → 任务安静跳过（绝不把"第1548辑"当资讯硬推）。
         """
-        items = self.fresh_items(limit=10, now=now)
+        items = self.fresh_items(limit=999, now=now)
         if not items:
             return None
         if exclude_source_ids:
@@ -225,7 +225,10 @@ class NewsService:
         【P2c-图鉴分拣】prefer_source_ids：图鉴型 UP（NEWS_GALLERY_MIDS）优先 ——
         它们是日更壁纸源，封面就是精图；当天没更新时回落其它带图条目（不空手）。
         """
-        items = self.fresh_items(need_image=True, limit=10, now=now)
+        # 注意 limit：先全量取（池子上限 200 条，无性能问题），再做 prefer 过滤——
+        # 否则"按时间取前 10"会把不够新的图鉴条目挤出候选池，prefer 永远摸不到
+        # （2026-10-19 线上踩到：难改狐言 15h 前的帖子被机核 10 条新帖挤出前 10）
+        items = self.fresh_items(need_image=True, limit=999, now=now)
         if not items:
             return None
         if prefer_source_ids:
