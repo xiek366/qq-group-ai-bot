@@ -31,6 +31,7 @@ P2c 回归测试：资讯模块 / 话题库 / 三个新任务 / 效果统计
 （全部状态写临时目录）
 """
 import asyncio
+import datetime as _dt
 import json
 import os
 import shutil
@@ -423,7 +424,13 @@ async def test_daily_quote_task():
     finally:
         Config.QUOTE_LLM_EVERY_DAYS = old_n
 
-    assert should_generate_today() is False, "默认 N=4，今天（年积日 281）不该原创"
+    # 【修复】原来断言写死了"今天不该原创"——should_generate_today 判断的是运行日
+    # （年积日 %4），写测试那天 281%4≠0 恰好通过，之后每 4 天（288/292…）就会撞红。
+    # 改成注入固定日期：2026-10-07 年积日 280（280%4==0 轮到原创），10-08 年积日 281（不轮到）
+    _d280 = _dt.datetime(2026, 10, 7, 12, 0, 0).timestamp()
+    _d281 = _dt.datetime(2026, 10, 8, 12, 0, 0).timestamp()
+    assert should_generate_today(now=_d280) is True, "年积日 280（280%4==0）应轮到 LLM 原创"
+    assert should_generate_today(now=_d281) is False, "年积日 281（281%4≠0）不该原创"
     print(f"   每日一句：池子轮播 + LLM 原创（失败回落）OK；样例 {first[:26]}…")
     print("✅ test_daily_quote_task PASS")
 
