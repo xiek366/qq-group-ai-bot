@@ -239,7 +239,8 @@ async def test_all_sources_fail():
 
 
 async def test_image_items_reserved_for_daily_image():
-    """资讯任务只发文字 → 别吃掉带图的条目，否则 19:30 的每日一图会"没图可发" """
+    """【2026-10-19 语义反转】资讯已支持带图 → 不再"无图优先"，按时间取最新；
+    同一条被资讯图文一体推过后，每日一图不再重复取它（不图文两推）"""
     import time
     now = time.time()
     img_item = _item(title="带图的最新条目", img="https://x/a.jpg", pub=now - 60, link="https://x/a")
@@ -247,18 +248,17 @@ async def test_image_items_reserved_for_daily_image():
     svc = NewsService(sources=[StubSource("s1", [img_item, plain_item])],
                       state_path=TMP / "reserve" / "state.json")
     await svc.refresh()
-    # 资讯任务应该选"不带图"的那条（即使带图的更新）
+    # 资讯任务按时间取最新（即便带图——封面会随资讯一起发）
     picked = svc.pick_for_digest(now=now)
-    assert picked is not None and picked.title == "不带图的条目", picked
+    assert picked is not None and picked.title == "带图的最新条目", picked
     svc.mark_pushed(picked)
-    # 每日一图仍然拿得到带图的那条
+    # 该条目已被资讯图文一体消耗 → 每日一图不重复取（无其它带图条目 → None）
     img_pick = svc.pick_image_item(now=now)
-    assert img_pick is not None and img_pick.title == "带图的最新条目", img_pick
-    # 只剩带图条目时，资讯任务也不会空手
-    svc2 = NewsService(sources=[StubSource("s1", [img_item])], state_path=TMP / "reserve2" / "state.json")
-    await svc2.refresh()
-    assert svc2.pick_for_digest(now=now) is not None, "只有带图条目时也要能用"
-    print("   资讯/破冰优先取不带图条目；带图的留给每日一图；退无可退也不会空手")
+    assert img_pick is None, f"同一条不应图文两推，实际 {img_pick and img_pick.title}"
+    # 无图条目还在池里 → 资讯下一轮仍可用
+    picked2 = svc.pick_for_digest(now=now)
+    assert picked2 is not None and picked2.title == "不带图的条目", picked2
+    print("   资讯按时间选条（带图连封面发）；同条不图文两推；池子不空手")
     print("✅ test_image_items_reserved_for_daily_image PASS")
 
 
@@ -521,15 +521,15 @@ async def test_gallery_split():
     plain = _item(title="《测试游戏》新 PV 公布", link="https://x/2",
                   img="", source="机核", sid="gcores")
     plain_img = _item(title="某作新图公开", link="https://x/3",
-                      img="https://x/3.jpg", source="机核", sid="gcores")
+                      img="https://x/3.jpg", source="机核", sid="gcores", hours_ago=0.5)
     svc = NewsService(sources=[StubSource("s1", [gal, plain, plain_img])],
                       state_path=tmp / "state.json")
     G = {"bili_2024069799"}
     await svc.refresh()   # StubSource 填充池子
 
-    # 1) 资讯选条：图鉴被排除，无图条目优先
+    # 1) 资讯选条：图鉴被排除，按时间取最新（无图优先已随"资讯带图"下线）
     it = svc.pick_for_digest(exclude_source_ids=G)
-    assert it is plain, f"资讯应选无图的普通条目，实际 {it and it.title}"
+    assert it is plain_img, f"资讯应选排除图鉴后的最新条目，实际 {it and it.title}"
 
     # 2) 图位：图鉴优先
     it2 = svc.pick_image_item(prefer_source_ids=G)
@@ -544,8 +544,7 @@ async def test_gallery_split():
     svc2 = NewsService(sources=[StubSource("s2", [gal])], state_path=tmp / "s2.json")
     assert svc2.pick_for_digest(exclude_source_ids=G) is None
 
-    # 5) 资讯带图：把无图条目标记已推 → 资讯候选只剩带图条目 → 封面随发
-    svc.mark_pushed(plain)
+    # 5) 资讯带图：轮换避开图鉴后选中最新的带图条目 → 封面随资讯一起发
     real = tmp / "c.jpg"
     real.write_bytes(b"jpg")
 

@@ -200,6 +200,10 @@ class Config:
     NEWS_COLG_FIDS: str = os.getenv("NEWS_COLG_FIDS", "")
     NEWS_COLG_MIN_REPLIES: int = int(os.getenv("NEWS_COLG_MIN_REPLIES", "5"))
     NEWS_COLG_MIN_VIEWS: int = int(os.getenv("NEWS_COLG_MIN_VIEWS", "500"))
+    # 【P2c-图鉴分拣】图鉴型 UP 分拣（详见 NEWS_GALLERY_MIDS）
+    # 来源轮换的避让窗口：最近 N 次推送里出过的来源，下次选条先避让。
+    # 越大 = 高产源（机核）被压得越狠；其它源断货时自然回落机核，不会空手。
+    NEWS_AVOID_RECENT: int = int(os.getenv("NEWS_AVOID_RECENT", "3"))
     # 【图鉴型 UP 分拣】这些 UP 的条目不进资讯流，专属每日一图（逗号分隔 B站 mid）
     # 它们的帖子是壁纸/美图合集，标题（"第1548辑"）当资讯没意义，当美图正合适。
     # 每日一图优先从这些源取图，当天没更新时回落其它带图条目。

@@ -197,12 +197,11 @@ class NewsService:
 
     def pick_for_digest(self, *, now: Optional[float] = None,
                         exclude_source_ids: Optional[set] = None) -> Optional[NewsItem]:
-        """资讯任务/破冰用：**优先不带图的条目**，把带图的留给「每日一图」。
+        """资讯任务/破冰用：全池（排除图鉴）→ 来源轮换 → 取最新。
 
-        为什么反过来（2026-10-08 观察线上成功案例后改的）：
-        资讯任务与破冰资讯源**只发文字**（标题 + 点评 + 链接），根本不发那张图 ——
-        所以让它们吃掉带图的条目是纯浪费，会让 19:30 的每日一图"没图可发"。
-        实在只有带图条目时也会用（不会因此空手），只是顺序上让位。
+        【历史包袱清理 2026-10-19】曾经这里"无图条目优先"（把带图的让给每日一图），
+        但资讯推送已支持带封面图，该理由失效；且无图池里几乎全是机核（B站/游研社
+        全带图），反而造成机核刷屏。现在带图条目连封面一起发，图文一体。
 
         【P2c-图鉴分拣】exclude_source_ids：图鉴型 UP（NEWS_GALLERY_MIDS）的条目
         直接排除出资讯流（壁纸合集当资讯没意义，专属每日一图）；
@@ -215,8 +214,7 @@ class NewsService:
             items = [i for i in items if i.source_id not in exclude_source_ids]
             if not items:
                 return None
-        plain = [i for i in items if not i.has_image]
-        return self._prefer_other_sources(plain or items)[0]
+        return self._prefer_other_sources(items)[0]
 
     def pick_image_item(self, *, now: Optional[float] = None,
                         prefer_source_ids: Optional[set] = None) -> Optional[NewsItem]:
@@ -237,16 +235,17 @@ class NewsService:
         return self._prefer_other_sources(items)[0]
 
     def _prefer_other_sources(self, items: list[NewsItem]) -> list[NewsItem]:
-        """来源轮换：优先返回「最近 2 次没推过」的来源的条目（保持时间倒序）。
+        """来源轮换：优先返回「最近 N 次没推过」的来源的条目（保持时间倒序）。
 
         背景（2026-10-12 实测）：机核日更多篇且全带图，"全局最新优先"会让它
         占据 ~91% 的推送位；B站专栏周更、游研社 feed 更新慢，完全没有出场机会。
-        避让窗口取最近 2 次：机核最多连发 2 条就让位，其余源有新鲜内容时优先出场；
-        其余源没有新内容时自然回落机核（它本来就是产量主力，不算委屈）。
+        避让窗口取最近 NEWS_AVOID_RECENT 次（默认 3）：机核出现 1 次后接下来
+        3 次选条都避让它，其余源没有新内容时自然回落机核（它本来就是产量主力）。
         """
         if len(items) <= 1:
             return items
-        avoid = set(self._recent_sources[-2:])
+        window = max(1, int(Config.NEWS_AVOID_RECENT or 1))
+        avoid = set(self._recent_sources[-window:])
         if not avoid:
             return items
         others = [i for i in items if i.source_id not in avoid]
