@@ -193,7 +193,10 @@ class Config:
     NEWS_IMAGE_MAX_MB: float = float(os.getenv("NEWS_IMAGE_MAX_MB", "8"))
     # COLG 论坛源（bbs.colg.cn，HTML 解析，无 RSS）：质量闸 = 回复≥N 或 浏览≥M（都低才丢）
     # FIDS 留空 = 预置 171（国服心情咖啡屋）；要加韩版填 "171,170"
-    NEWS_COLG_ENABLED: bool = os.getenv("NEWS_COLG_ENABLED", "true").lower() == "true"
+    # ⚠️ 默认关闭：COLG 挂了腾讯 EdgeOne Bot 防护，对机房 IP 一律下发 JS 挑战
+    #   （2026-10-19 实测：TLS 伪装也过不去），服务器上永远只拿到 988 字节挑战页。
+    #   家宽环境或未来接入 cookie 解算方案时可手动开启。
+    NEWS_COLG_ENABLED: bool = os.getenv("NEWS_COLG_ENABLED", "false").lower() == "true"
     NEWS_COLG_FIDS: str = os.getenv("NEWS_COLG_FIDS", "")
     NEWS_COLG_MIN_REPLIES: int = int(os.getenv("NEWS_COLG_MIN_REPLIES", "5"))
     NEWS_COLG_MIN_VIEWS: int = int(os.getenv("NEWS_COLG_MIN_VIEWS", "500"))
