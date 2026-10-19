@@ -494,7 +494,8 @@ async def test_daily_image_task():
     parts = await task.render(TaskContext(group_id=GID, now=0.0, config={}, group_config={}))
     text = parts[0]
     assert text.startswith("[CQ:image,file=file:///"), text
-    assert "某作新图公开" in text and "来源：游研社" in text and "https://x/9" in text, text
+    # 【形态更新 2026-10-19】纯美图分享：图 + 配文，不带标题/来源/链接
+    assert "某作新图公开" not in text and "来源：" not in text and "https://x/9" not in text, text
     assert "新鲜感" in text, text
 
     # 取不到图 → 跳过（不发纯文字充数）
@@ -508,7 +509,13 @@ async def test_daily_image_task():
         raise AssertionError("取不到图应该跳过")
     except TaskSkip as e:
         assert "配图下载失败" in str(e), e
-    print("   每日一图：带 CQ 图 + 来源 + 链接；取不到图 → 跳过")
+    # 配文生成失败 → 发纯图（不空手也不带资讯壳）
+    item3 = _item(title="第三张", link="https://x/11", img="https://x/11.jpg")
+    svc3 = NewsService(sources=[StubSource("s3", [item3])], state_path=tmp / "s3.json")
+    task3 = DailyImageTask(svc3, fetcher=fetcher, captioned=lambda it: _ret(""))
+    parts3 = await task3.render(TaskContext(group_id=GID, now=0.0, config={}, group_config={}))
+    assert parts3[0].startswith("[CQ:image") and "\n" not in parts3[0], parts3[0]
+    print("   每日一图：纯美图（图 + 一句配文，无标题/来源/链接）；配文失败发纯图；取不到图 → 跳过")
     print("✅ test_daily_image_task PASS")
 
 

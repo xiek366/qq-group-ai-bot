@@ -5,12 +5,17 @@
 `cron` 触发（默认 19:30）。Q3/ROADMAP 的形态：**检索当天资讯的配图**，而不是生成图片 ——
 天然游戏/动漫向、零额外 API 成本。
 
+【形态更新 2026-10-19】**纯美图分享**：一张图 + 一句轻配文（LLM，失败则发纯图），
+不带标题/来源/链接——图鉴 UP（NEWS_GALLERY_MIDS）的封面就是壁纸本身，
+"群友分享美图"的观感优先于资讯署名（D19 的"必带来源"针对的是资讯图文场景，
+纯美图场景出处可从任务日志与 state.json 追溯）。
+
 流程与降级（ROADMAP §5/A.6 的硬要求）：
 
 ```
-挑一条"还没推过、带封面图、足够新"的资讯
+挑一条"还没推过、带封面图、足够新"的资讯（图鉴 UP 优先）
   → 下载图片到本地（体积上限 / 必须 image/* / 超时 → 放弃）
-  → 发 [CQ:image] + 配文（标题 + 来源 + 原文链接）   ← D19：必带来源
+  → 发 [CQ:image] + 一句轻配文
   → 标记该资讯已推（跨天去重）
 ```
 
@@ -101,14 +106,13 @@ class DailyImageTask(Task):
             try:
                 caption = (await self._captioned(item) or "").strip()
             except Exception as e:
-                logger.warning(f"[News] 配文生成失败（用标题兜底）: {e}")
+                logger.warning(f"[News] 配文生成失败（发纯图）: {e}")
 
-        # 图片 + 配文（图片在前，QQ 里显示更自然）
+        # 【形态更新 2026-10-19】纯美图分享：一张图 + 一句轻配文，
+        # 不带标题/来源/链接——图鉴 UP 的封面就是壁纸本身，新闻壳反而破坏
+        # "群友分享美图"的感觉（出处记录在任务日志与 state.json 里，可追溯）
         lines = [to_cq_image(Path(path))]
-        head = f"🖼 {item.title}"
         if caption:
-            head += f"\n{caption}"
-        lines.append(head)
-        lines.append(f"来源：{item.source}" + (f"\n{item.link}" if item.link else ""))
+            lines.append(caption)
         self.service.mark_pushed(item)
         return ["\n".join(lines)]
