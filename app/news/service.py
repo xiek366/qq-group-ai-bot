@@ -195,24 +195,43 @@ class NewsService:
         out.sort(key=lambda i: i.pub_time, reverse=True)
         return out[:limit]
 
-    def pick_for_digest(self, *, now: Optional[float] = None) -> Optional[NewsItem]:
+    def pick_for_digest(self, *, now: Optional[float] = None,
+                        exclude_source_ids: Optional[set] = None) -> Optional[NewsItem]:
         """资讯任务/破冰用：**优先不带图的条目**，把带图的留给「每日一图」。
 
         为什么反过来（2026-10-08 观察线上成功案例后改的）：
         资讯任务与破冰资讯源**只发文字**（标题 + 点评 + 链接），根本不发那张图 ——
         所以让它们吃掉带图的条目是纯浪费，会让 19:30 的每日一图"没图可发"。
         实在只有带图条目时也会用（不会因此空手），只是顺序上让位。
+
+        【P2c-图鉴分拣】exclude_source_ids：图鉴型 UP（NEWS_GALLERY_MIDS）的条目
+        直接排除出资讯流（壁纸合集当资讯没意义，专属每日一图）；
+        排除后池子空了就返回 None → 任务安静跳过（绝不把"第1548辑"当资讯硬推）。
         """
         items = self.fresh_items(limit=10, now=now)
         if not items:
             return None
+        if exclude_source_ids:
+            items = [i for i in items if i.source_id not in exclude_source_ids]
+            if not items:
+                return None
         plain = [i for i in items if not i.has_image]
         return self._prefer_other_sources(plain or items)[0]
 
-    def pick_image_item(self, *, now: Optional[float] = None) -> Optional[NewsItem]:
-        """每日一图用：必须带图，且尽量新"""
+    def pick_image_item(self, *, now: Optional[float] = None,
+                        prefer_source_ids: Optional[set] = None) -> Optional[NewsItem]:
+        """每日一图用：必须带图，且尽量新。
+
+        【P2c-图鉴分拣】prefer_source_ids：图鉴型 UP（NEWS_GALLERY_MIDS）优先 ——
+        它们是日更壁纸源，封面就是精图；当天没更新时回落其它带图条目（不空手）。
+        """
         items = self.fresh_items(need_image=True, limit=10, now=now)
-        return self._prefer_other_sources(items)[0] if items else None
+        if not items:
+            return None
+        if prefer_source_ids:
+            preferred = [i for i in items if i.source_id in prefer_source_ids]
+            items = preferred or items
+        return self._prefer_other_sources(items)[0]
 
     def _prefer_other_sources(self, items: list[NewsItem]) -> list[NewsItem]:
         """来源轮换：优先返回「最近 2 次没推过」的来源的条目（保持时间倒序）。

@@ -56,6 +56,12 @@ class DailyImageTask(Task):
         self.service = service
         self._fetcher = fetcher
         self._captioned = captioned
+        # 【P2c-图鉴分拣】图鉴型 UP（NEWS_GALLERY_MIDS）优先供图，当天没更新回落其它带图条目
+        self._prefer_ids = {
+            f"bili_{m.strip()}"
+            for m in (Config.NEWS_GALLERY_MIDS or "").replace("，", ",").split(",")
+            if m.strip().isdigit()
+        }
         self.trigger_spec = {"type": "cron", "at": Config.DAILY_IMAGE_AT}
 
     async def render(self, ctx: TaskContext) -> list:
@@ -66,7 +72,7 @@ class DailyImageTask(Task):
         except Exception as e:
             logger.warning(f"[News] 刷新失败（继续用缓存）: {e}")
 
-        item = self.service.pick_image_item()
+        item = self.service.pick_image_item(prefer_source_ids=self._prefer_ids)
         if item is None:
             # 带上诊断数字：一眼能看出是"源里没图"还是"都推过了"还是"都太旧了"
             detail = ""

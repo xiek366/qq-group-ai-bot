@@ -276,6 +276,9 @@ class MessageHandler:
         self.news = NewsService()
         self.topic_pool = TopicPool()
         self.quote_pool = TopicPool(path=QUOTES_STATE_PATH, topics=list(PRESET_QUOTES))
+        # 【P2c-图鉴分拣】图鉴型 UP（NEWS_GALLERY_MIDS）不进资讯流，专属每日一图
+        from app.schedule.tasks.news_digest import gallery_source_ids
+        self._gallery_ids = gallery_source_ids(Config.NEWS_GALLERY_MIDS)
         self.scheduler.register(NewsDigestTask(self.news, commenter=self._comment_news))
         self.scheduler.register(DailyQuoteTask(self.quote_pool, generator=self._gen_quote))
         self.scheduler.register(DailyImageTask(self.news, captioned=self._caption_image))
@@ -807,7 +810,7 @@ class MessageHandler:
             await self.news.refresh()
         except Exception as e:
             logger.debug(f"[Icebreak] 资讯刷新失败（跳过该内容源）: {e}")
-        item = self.news.pick_for_digest()
+        item = self.news.pick_for_digest(exclude_source_ids=self._gallery_ids)
         if item is None:
             return ""
         self.news.mark_pushed(item)
@@ -879,7 +882,7 @@ class MessageHandler:
             await self.news.refresh()
         except Exception as e:
             logger.warning(f"[News] /资讯 刷新失败: {e}")
-        item = self.news.pick_for_digest()
+        item = self.news.pick_for_digest(exclude_source_ids=self._gallery_ids)
         if item is None:
             await self._send_group(group_id, "这会儿没刷到新的游戏/动漫消息，晚点再来看看吧 🥺")
             return

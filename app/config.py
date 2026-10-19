@@ -200,6 +200,10 @@ class Config:
     NEWS_COLG_FIDS: str = os.getenv("NEWS_COLG_FIDS", "")
     NEWS_COLG_MIN_REPLIES: int = int(os.getenv("NEWS_COLG_MIN_REPLIES", "5"))
     NEWS_COLG_MIN_VIEWS: int = int(os.getenv("NEWS_COLG_MIN_VIEWS", "500"))
+    # 【图鉴型 UP 分拣】这些 UP 的条目不进资讯流，专属每日一图（逗号分隔 B站 mid）
+    # 它们的帖子是壁纸/美图合集，标题（"第1548辑"）当资讯没意义，当美图正合适。
+    # 每日一图优先从这些源取图，当天没更新时回落其它带图条目。
+    NEWS_GALLERY_MIDS: str = os.getenv("NEWS_GALLERY_MIDS", "2024069799,64090032")
     # 任务时刻：资讯 11:30 / 每日一句 12:30 / 每日一图 19:30（错开，别挤在一起）
     NEWS_DIGEST_AT: str = os.getenv("NEWS_DIGEST_AT", "11:30")
     DAILY_QUOTE_AT: str = os.getenv("DAILY_QUOTE_AT", "12:30")

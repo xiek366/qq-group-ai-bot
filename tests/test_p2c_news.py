@@ -451,12 +451,16 @@ async def test_news_digest_task():
         seen["item"] = it
         return "这pv看着挺对味的"
 
-    task = NewsDigestTask(svc, commenter=commenter)
+    async def fetch_fail(url):
+        return None   # 桩：模拟封面下载失败 → 降级纯文字
+
+    task = NewsDigestTask(svc, commenter=commenter, fetcher=fetch_fail)
     parts = await task.render(TaskContext(group_id=GID, now=0.0, config={}, group_config={}))
     text = parts[0]
     assert "《测试游戏》公布新 PV" in text and "这pv看着挺对味的" in text, text
     assert "来源：机核" in text and "https://x/1" in text, text
     assert "摘要" not in text, "不能把正文/摘要塞进推送"
+    assert "[CQ:image" not in text, "封面下载失败必须降级纯文字"
     assert seen["item"] is item
     assert svc.has_pushed(item), "推过的要记指纹（跨天去重）"
 
@@ -506,6 +510,57 @@ async def test_daily_image_task():
         assert "配图下载失败" in str(e), e
     print("   每日一图：带 CQ 图 + 来源 + 链接；取不到图 → 跳过")
     print("✅ test_daily_image_task PASS")
+
+
+async def test_gallery_split():
+    """【P2c-图鉴分拣】图鉴 UP 不进资讯、专属图位优先；资讯带图条目封面随发"""
+    tmp = TMP / "gallery"
+    shutil.rmtree(tmp, ignore_errors=True)
+    gal = _item(title="二次元图鉴 | 托帕（壁纸美图·第1548辑）", link="https://bilibili.com/read/cv1",
+                img="https://i0.hdslb.com/1.png", source="B站·萌村百科", sid="bili_2024069799")
+    plain = _item(title="《测试游戏》新 PV 公布", link="https://x/2",
+                  img="", source="机核", sid="gcores")
+    plain_img = _item(title="某作新图公开", link="https://x/3",
+                      img="https://x/3.jpg", source="机核", sid="gcores")
+    svc = NewsService(sources=[StubSource("s1", [gal, plain, plain_img])],
+                      state_path=tmp / "state.json")
+    G = {"bili_2024069799"}
+    await svc.refresh()   # StubSource 填充池子
+
+    # 1) 资讯选条：图鉴被排除，无图条目优先
+    it = svc.pick_for_digest(exclude_source_ids=G)
+    assert it is plain, f"资讯应选无图的普通条目，实际 {it and it.title}"
+
+    # 2) 图位：图鉴优先
+    it2 = svc.pick_image_item(prefer_source_ids=G)
+    assert it2 is gal, f"图位应优先图鉴 UP，实际 {it2 and it2.title}"
+
+    # 3) 图鉴推过后（同日第二次轮到图位）→ 回落其它带图条目
+    svc.mark_pushed(gal)
+    it3 = svc.pick_image_item(prefer_source_ids=G)
+    assert it3 is plain_img, f"图鉴耗尽应回落普通带图条目，实际 {it3 and it3.title}"
+
+    # 4) 池子里只剩图鉴条目 → 资讯安静返回 None（绝不把"第1548辑"当资讯硬推）
+    svc2 = NewsService(sources=[StubSource("s2", [gal])], state_path=tmp / "s2.json")
+    assert svc2.pick_for_digest(exclude_source_ids=G) is None
+
+    # 5) 资讯带图：把无图条目标记已推 → 资讯候选只剩带图条目 → 封面随发
+    svc.mark_pushed(plain)
+    real = tmp / "c.jpg"
+    real.write_bytes(b"jpg")
+
+    async def fetch_ok(url):
+        return real
+
+    async def commenter(it2):
+        return "点评一句"
+
+    task = NewsDigestTask(svc, commenter=commenter, fetcher=fetch_ok)
+    parts = await task.render(TaskContext(group_id=GID, now=0.0, config={}, group_config={}))
+    assert parts[0].startswith("[CQ:image"), parts[0][:60]
+    assert "某作新图公开" in parts[0] and "来源：机核" in parts[0], parts[0]
+    print("   分拣：资讯排除图鉴 / 图位图鉴优先 / 耗尽回落 / 资讯带图封面 全通过")
+    print("✅ test_gallery_split PASS")
 
 
 async def test_rotating_icebreak_source():
@@ -576,6 +631,7 @@ async def _run_all():
     await test_daily_quote_task()
     await test_news_digest_task()
     await test_daily_image_task()
+    await test_gallery_split()
     await test_rotating_icebreak_source()
     test_effect_metrics_by_kind()
 
