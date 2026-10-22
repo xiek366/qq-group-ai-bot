@@ -56,6 +56,17 @@ class PicRefillTask(Task):
     async def render(self, ctx: TaskContext) -> list:
         if not Config.PIC_POOL_ENABLED:
             raise TaskSkip("图池功能已关闭")
+        if ctx.dry_run:
+            # 试跑：只报告"本来会抓哪篇"，不刷新、不请求专栏接口、不写图池、不记账
+            articles = self.service.all_items() if self.service is not None else []
+            limit = max(1, int(Config.PIC_POOL_ARTICLES_PER_RUN or 1))
+            picks = self.pool.candidates(articles)[:limit]
+            st = self.pool.stats()
+            if not picks:
+                return [f"试跑：暂无新专栏可抓；池子 {st['total']} 张 / 剩 {st['remaining']} 张"]
+            desc = "、".join(f"cv{cid}《{title}》" for cid, title, _sid in picks)
+            return [f"试跑：本应抓取 {desc}（不请求接口、不写图池）；"
+                    f"池子 {st['total']} 张 / 剩 {st['remaining']} 张"]
         articles = []
         if self.service is not None:
             try:

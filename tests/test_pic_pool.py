@@ -374,14 +374,24 @@ async def test_pic_refill_task():
     class StubNews:
         def __init__(self, arts):
             self._arts = arts
+            self.refreshed = 0
 
         async def refresh(self):
+            self.refreshed += 1
             return []
 
         def all_items(self):
             return self._arts
 
-    task = PicRefillTask(pool, service=StubNews([_item("111", "A")]))
+    svc = StubNews([_item("111", "A")])
+    task = PicRefillTask(pool, service=svc)
+
+    # 试跑：只报告候选，不刷新、不抓图、不写池、不记账
+    parts = await task.render(_ctx(dry_run=True))
+    assert parts and "本应抓取 cv111" in parts[0], parts
+    assert svc.refreshed == 0, "试跑不应该刷新资讯"
+    assert pool.stats()["total"] == 0 and pool.stats()["harvested"] == 0, pool.stats()
+
     parts = await task.render(_ctx())
     assert parts and "图池补货" in parts[0], parts
     assert pool.stats()["total"] == 3
