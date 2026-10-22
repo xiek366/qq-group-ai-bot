@@ -176,6 +176,10 @@ class Task:
     # 干完活但**没有内容要发**的任务（如摘要、清理）设为 True：
     # 否则它每次都会被判成"内容为空"→ 不记 last_run → interval 触发器每 tick 重复触发。
     silent_ok: bool = False
+    # 【P2c-图池】**产出只进日志/面板、绝不发到群里**的任务设为 True（如凌晨补货）。
+    # 与 `is_proactive=False` 的区别：后者只豁免"打扰白名单/预算"，仍然会发送；
+    # 本标志才是"这个任务根本不发消息"。干跑（/任务 试跑）仍会返回内容给管理员看。
+    no_send: bool = False
     # 默认参数（会被群配置 / 环境变量覆盖）
     defaults: dict = {
         "enabled": True,
@@ -295,6 +299,14 @@ class Task:
             logger.info(f"[Schedule] 任务 {self.name} 群 {ctx.group_id} 试跑：生成 {len(parts)} 条（未发送）")
             return TaskResult(status="dry_run", parts=parts, fingerprint_value=fp,
                               elapsed=time.time() - start)
+
+        # 【P2c-图池】维护任务：产出只进日志/面板，**绝不发到群里**（干跑仍返回给管理员看）
+        if self.no_send and not ctx.dry_run:
+            logger.info(
+                f"[Schedule] 任务 {self.name} 群 {ctx.group_id} 已执行（维护任务，不发送）：{parts[0][:60]}"
+            )
+            return TaskResult(status="done", parts=parts, reason="维护任务不发送",
+                              fingerprint_value=fp, elapsed=time.time() - start)
 
         try:
             ok = await self.deliver(ctx, parts)

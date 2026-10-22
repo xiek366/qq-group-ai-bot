@@ -283,6 +283,42 @@ async def test_d15_and_maintenance_task():
     print("✅ test_d15_and_maintenance_task PASS")
 
 
+async def test_quiet_hours_only_blocks_sending_tasks():
+    """【P2c-图池】静默时段只拦"会发消息"的任务；维护任务（no_send）夜里照跑
+
+    线上事故（2026-10-19）：04:00 的图池补货任务被"静默时段"闸每天拦死，
+    自动补货永远不会发生 —— 因为闸门当时不区分任务类型。
+    """
+    sched, sent, _ = _fresh("quiet_night")
+    Config.PROACTIVE_GROUPS = [GID]
+    sched._group_ids = lambda: [GID]
+    sched._last_activity = lambda g: _day(4, 0)
+
+    # ① 会发消息的任务（主动）在 04:00 必须被静默拦下
+    talker = FakeTask(name="talker", trigger={"type": "cron", "at": "04:00"})
+    # ② 维护任务（不发消息）在 04:00 必须放行
+    maint = FakeTask(name="maint", parts=["补货 6 张"], trigger={"type": "cron", "at": "04:00"})
+    maint.is_proactive = False
+    maint.no_send = True
+    maint.priority = PRIORITY_MAINTENANCE
+    sched.register(talker)
+    sched.register(maint)
+
+    await sched.tick(now=_day(4, 0))
+    texts = [t for _, t in sent]
+    assert "你好呀" not in texts, f"04:00 主动任务必须被静默拦下：{sent}"
+    assert "补货 6 张" not in texts, f"维护任务**不发消息**（no_send）：{sent}"
+    assert sched.state.task_state(GID, "talker")["last_skip_reason"] == "静默时段"
+    assert sched.state.task_state(GID, "maint")["last_result"] == "done", \
+        sched.state.task_state(GID, "maint")
+
+    # ③ 干跑（/任务 试跑）仍然能看到维护任务的产出（只是不发）
+    res = await sched.run_task("maint", GID, dry_run=True, now=_day(4, 30))
+    assert res.status == "dry_run" and res.parts == ["补货 6 张"], (res.status, res.parts)
+    print("   04:00：主动任务被拦（静默时段）；维护任务照跑且不发消息；试跑仍能看产出")
+    print("✅ test_quiet_hours_only_blocks_sending_tasks PASS")
+
+
 async def test_backoff_on_no_reply():
     sched, sent, _ = _fresh("backoff")
     Config.PROACTIVE_GROUPS = [GID]
@@ -553,6 +589,7 @@ async def _run_all():
     await test_daily_limits()
     await test_cooldown_and_gates()
     await test_d15_and_maintenance_task()
+    await test_quiet_hours_only_blocks_sending_tasks()
     await test_backoff_on_no_reply()
     await test_empty_and_error()
     await test_fingerprint_dedup()

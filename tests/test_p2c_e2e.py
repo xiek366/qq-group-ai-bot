@@ -179,17 +179,30 @@ async def main():
     assert sched.tasks["icebreak"].source.name == "icebreak_rotating", "破冰内容源应该是轮换源"
     print(f"   ① 已注册 {len(names)} 个任务；破冰内容源 = 轮换（{names}）")
 
-    # ---------- ② 11:30 资讯 ----------
+    # ---------- ② 11:30 资讯（**2026-10-19 起带封面图**，图在前、文在后） ----------
+    img_dir = TMP / "imgs"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    real_img = img_dir / "pic.jpg"
+    real_img.write_bytes(b"jpg-bytes")
+
+    async def fetcher(url):
+        return real_img
+
+    # 资讯任务也要注入桩：否则它会真的去下载 https://x/1.jpg（联网、慢、可能偶发失败）
+    for name, task in sched.tasks.items():
+        if name == "news_digest":
+            task._fetcher = fetcher
     onebot.group_sent.clear()
     await sched.tick(now=_day(11, 30))
     news_msgs = [(g, t) for g, t in onebot.group_sent if "📰" in t]
     assert news_msgs, f"资讯任务应该发一条：{onebot.group_sent}"
     gid, text = news_msgs[0]
     assert gid == PROD_GID, news_msgs
+    assert text.startswith("[CQ:image"), f"资讯现在应该带封面图（图在前）：{text[:60]}"
     assert "《测试游戏》公布新 PV" in text and "这个看着有点意思" in text, text
     assert "来源：测试源" in text and "https://x/1" in text, text
     assert "摘要" not in text and "正文" not in text, f"不能推正文/摘要：{text}"
-    print(f"   ② 资讯：{text.splitlines()[0][:22]}… + 点评 + 来源 + 链接（无正文）")
+    print(f"   ② 资讯：封面图 + 标题 + 点评 + 来源 + 链接（无正文）")
 
     # ---------- ③ 跨天去重：第二天不再推同一条 ----------
     for gid_ in (PROD_GID,):
@@ -218,15 +231,7 @@ async def main():
     assert quotes, f"每日一句应该发：{onebot.group_sent}"
     print(f"   ④ 每日一句：{quotes[0][:26]}…")
 
-    # ---------- ⑤ 19:30 每日一图 ----------
-    img_dir = TMP / "imgs"
-    img_dir.mkdir(parents=True, exist_ok=True)
-    real_img = img_dir / "pic.jpg"
-    real_img.write_bytes(b"jpg-bytes")
-
-    async def fetcher(url):
-        return real_img
-
+    # ---------- ⑤ 19:30 每日一图（**2026-10-19 起是纯美图：图 + 一句配文，无标题/来源/链接**） ----------
     for name, task in sched.tasks.items():
         if name == "daily_image":
             task._fetcher = fetcher
@@ -238,13 +243,14 @@ async def main():
     sched._last_proactive.clear()
     onebot.group_sent.clear()
     await sched.tick(now=_day(19, 30) + 4 * 86400)
-    # ⚠️ 用「🖼」判定是不是"每日一图"：破冰消息会按概率附一张收藏表情，
-    #    那也是 [CQ:image]，直接用 [CQ:image 过滤会把表情包误判成配图（踩过，偶发失败）。
-    imgs = [t for g, t in onebot.group_sent if "🖼" in t]
+    # ⚠️ 判定"这条是不是每日一图"用 `startswith("[CQ:image")`：
+    #    破冰消息会按概率**在末尾**附一张收藏表情，那种消息不以图片开头，不会误判。
+    imgs = [t for g, t in onebot.group_sent if t.startswith("[CQ:image")]
     assert imgs, f"每日一图应该带图发出：{onebot.group_sent}"
-    assert "[CQ:image" in imgs[0], f"每日一图必须带本地图片 CQ 码：{imgs[0]}"
-    assert "来源：测试源" in imgs[0] and "https://x/1" in imgs[0], imgs[0]
-    assert "新鲜感" in imgs[0], imgs[0]
+    assert "新鲜感" in imgs[0], f"应该带 LLM 配文：{imgs[0]}"
+    # 纯美图形态：不再有标题 / 来源 / 链接（D19 的署名要求只针对资讯图文场景）
+    assert "🖼" not in imgs[0] and "来源：" not in imgs[0] and "http" not in imgs[0].split("\n")[-1], \
+        f"纯美图不该带标题/来源/链接：{imgs[0]}"
     # 取不到图 → 一条都不发
     async def no_fetch(url):
         return None
@@ -257,8 +263,9 @@ async def main():
     sched._last_proactive.clear()
     onebot.group_sent.clear()
     await sched.tick(now=_day(19, 30) + 5 * 86400)
-    assert not [t for _, t in onebot.group_sent if "🖼" in t], "取不到图不该发占位图/纯文字"
-    print("   ⑤ 每日一图：带本地 CQ 图 + 来源链接；取不到图 → 一条都不发")
+    assert not [t for _, t in onebot.group_sent if t.startswith("[CQ:image")], \
+        "取不到图不该发占位图/纯文字"
+    print("   ⑤ 每日一图：纯美图（图 + 配文，无标题/来源/链接）；取不到图 → 一条都不发")
 
     # ---------- ⑥ 破冰内容源轮换 ----------
     ice_sent = []
@@ -268,9 +275,12 @@ async def main():
         sched._last_activity = lambda g: _day(20, 0) + i * 86400 - 3600
         onebot.group_sent.clear()
         await sched.tick(now=_day(20, 0) + i * 86400)
-        # 只看"破冰类"消息：排掉资讯/每日一句/每日一图（它们的优先级更高，可能先发）
+        # 只看"破冰类"消息：排掉资讯/每日一句/每日一图（优先级更高，可能先发）
+        # 每日一图现在以 [CQ:image 开头（纯美图，没有 🖼 标记），所以按"是否以图片开头"排除
         got = [t for g, t in onebot.group_sent
-               if g == PROD_GID and not any(mark in t for mark in ("📰", "💬", "🖼"))]
+               if g == PROD_GID
+               and not t.startswith("[CQ:image")
+               and not any(mark in t for mark in ("📰", "💬"))]
         ice_sent.append(got[0] if got else "")
     assert any("话题包" in t for t in ice_sent), ice_sent
     assert any("历史回顾" in t for t in ice_sent), ice_sent

@@ -203,7 +203,11 @@ class Scheduler:
     async def _gate(self, group_id: int, task: Task, cfg: dict, group_cfg: dict, now: float) -> str:
         """返回非空 = 被拦下的原因（"not_due" 表示只是没到点，不算被拦）"""
         # 静默时段（跨午夜由 in_quiet_hours 处理）
-        if in_quiet_hours(now, group_cfg.get("quiet_hours") or ""):
+        # ⚠️ **只约束"会发消息"的任务**。维护类任务（图池补货 / 摘要）不发消息，
+        # 夜里跑反而更好（避开群活跃、避开 B站 风控高峰）—— 04:00 补货正是这么设计的。
+        # （2026-10-19 发现：原来不区分任务类型，导致 04:00 的补货任务每天都被"静默时段"拦死，
+        #   自动补货永远不会发生。）
+        if task.is_proactive and in_quiet_hours(now, group_cfg.get("quiet_hours") or ""):
             return "静默时段"
         # 任务自定义工作时段（破冰沿用 ICEBREAK_WORK_START/END）
         wh = cfg.get("work_hours")

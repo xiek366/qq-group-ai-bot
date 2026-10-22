@@ -208,6 +208,25 @@ class Config:
     # 它们的帖子是壁纸/美图合集，标题（"第1548辑"）当资讯没意义，当美图正合适。
     # 每日一图优先从这些源取图，当天没更新时回落其它带图条目。
     NEWS_GALLERY_MIDS: str = os.getenv("NEWS_GALLERY_MIDS", "2024069799,64090032")
+    # ===== 【P2c-图池】专栏正文图 → 本地图池（FIFO 出图） =====
+    # 以前每篇专栏只有 1 张头图，测试几次就耗尽；现在抓正文图（一篇 6~12 张）。
+    PIC_POOL_ENABLED: bool = os.getenv("PIC_POOL_ENABLED", "true").lower() == "true"
+    # 池子上限（张）；超出时优先淘汰"最旧的、已发过的"。单图缩放后约 200~400KB。
+    PIC_POOL_LIMIT: int = int(os.getenv("PIC_POOL_LIMIT", "300"))
+    # 只收"大图"：像素数下限（默认 40 万 ≈ 720x556），用来跳过横幅/分割线/二维码
+    PIC_POOL_MIN_PIXELS: int = int(os.getenv("PIC_POOL_MIN_PIXELS", "400000"))
+    # 图床缩放宽度：B站支持 `@1200w.jpg`（实测 15MB → 220KB）
+    PIC_POOL_MAX_WIDTH: int = int(os.getenv("PIC_POOL_MAX_WIDTH", "1200"))
+    # 出图顺序：random（默认，随机且一轮不重复）| fifo（严格按入库顺序，发完才循环）
+    # 为什么要随机（2026-10-19 用户要求）：一篇专栏的 6~12 张是**同一角色/同一主题**，
+    # FIFO 会连着好几天发同一个人。
+    PIC_POOL_ORDER: str = os.getenv("PIC_POOL_ORDER", "random")
+    # 随机模式下**避开最近 N 篇专栏**的图（默认 1 = 不与昨天同一篇），避免连着同主题；
+    # 池子里只剩同一篇时会自动退让，不会卡死。
+    PIC_POOL_AVOID_CIDS: int = int(os.getenv("PIC_POOL_AVOID_CIDS", "1"))
+    # 补货时刻与每次抓几篇（**必须低频串行**：B站 -509 风控很凶）
+    PIC_POOL_REFILL_AT: str = os.getenv("PIC_POOL_REFILL_AT", "04:00")
+    PIC_POOL_ARTICLES_PER_RUN: int = int(os.getenv("PIC_POOL_ARTICLES_PER_RUN", "1"))
     # 任务时刻：资讯 11:30 / 每日一句 12:30 / 每日一图 19:30（错开，别挤在一起）
     NEWS_DIGEST_AT: str = os.getenv("NEWS_DIGEST_AT", "11:30")
     DAILY_QUOTE_AT: str = os.getenv("DAILY_QUOTE_AT", "12:30")

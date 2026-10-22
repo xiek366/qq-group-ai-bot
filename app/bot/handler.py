@@ -43,13 +43,14 @@ from app.schedule.tasks import (
     DailyQuoteTask,
     IcebreakTask,
     NewsDigestTask,
+    PicRefillTask,
     SummaryJob,
     WaterReminderTask,
     WeatherMorningTask,
     make_rotating_source,
 )
 from app.context.topic_pool import PRESET_QUOTES, TopicPool
-from app.news import NewsService
+from app.news import NewsService, PicPool
 from app.weather import WeatherService, available_cities as weather_cities, resolve_city
 # from app.image.provider import  # 生图暂时关闭 create_provider as create_image_provider, save_image as save_local_image
 
@@ -279,9 +280,15 @@ class MessageHandler:
         # 【P2c-图鉴分拣】图鉴型 UP（NEWS_GALLERY_MIDS）不进资讯流，专属每日一图
         from app.schedule.tasks.news_digest import gallery_source_ids
         self._gallery_ids = gallery_source_ids(Config.NEWS_GALLERY_MIDS)
+        # 【P2c-图池】专栏正文图池：凌晨补货、每日一图优先出池图（FIFO）
+        self.pic_pool = PicPool()
         self.scheduler.register(NewsDigestTask(self.news, commenter=self._comment_news))
         self.scheduler.register(DailyQuoteTask(self.quote_pool, generator=self._gen_quote))
-        self.scheduler.register(DailyImageTask(self.news, captioned=self._caption_image))
+        self.scheduler.register(DailyImageTask(
+            self.news, captioned=self._caption_image,
+            pool=self.pic_pool, pool_captioned=self._caption_pool_pic,
+        ))
+        self.scheduler.register(PicRefillTask(self.pic_pool, service=self.news))
         # 破冰内容源改成轮换（ROADMAP §4.5）：话题包 → 历史回顾 → 资讯 → 话题库 → 热搜兜底
         self.scheduler.tasks["icebreak"].source = make_rotating_source([
             ("LLM话题包", self._gen_icebreak_topic),
@@ -303,6 +310,7 @@ class MessageHandler:
             "  /看 + 图片         看图（手机端不用 @）\n"
             "  /天气 [城市]       查天气（不填就用本群绑定的城市）\n"
             "  /资讯              看一条最新游戏/动漫资讯\n"
+            "  /图池 [补货]       看壁纸图池库存（补货仅管理员）\n"
             "  /任务 [列表|试跑|执行] 定时任务管理（仅管理员）\n"
             "  /表情 或 /sticker   随机发一个收藏的表情包\n"
             "  /叫我 <外号>        给你自己设一个外号（最多 3 个）\n"
@@ -548,6 +556,11 @@ class MessageHandler:
             await self._handle_news(group_id, parsed)
             return
 
+        # 5.8) 【P2c-图池】/图池 [补货] —— 看图池库存 / 手动补货（被动响应）
+        if command in ("/图池", "/picpool", "/pics"):
+            await self._handle_picpool(group_id, parsed)
+            return
+
         # 生图暂时关闭（/画 命令）
         # if command in ("/draw", "/画", "/生图", "/image"):
         #     await self._handle_draw(group_id, parsed)
@@ -764,6 +777,63 @@ class MessageHandler:
                 await run_blocking(self.style.update, group_id, profile)
         except Exception as e:
             logger.error(f"[Style] 总结异常 group={group_id}: {e}")
+
+    async def _caption_pool_pic(self, pic: dict) -> str:
+        """图池配文：用图鉴专栏的标题/画师当上下文（纯美图不署名，但配文能贴题）"""
+        if self.llm is None:
+            return ""
+        title = pic.get("title") or ""
+        artist = pic.get("artist") or ""
+        prompt = persona.load_scene("image_caption", title=title or "二次元壁纸", source=artist or "网络")
+        if not prompt:
+            return ""
+        reply = await self.llm.chat(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt=f"{self.persona}\n\n只输出一句话，不要任何解释。",
+            temperature=0.9,
+        )
+        text = (reply or "").strip().splitlines()[0] if (reply or "").strip() else ""
+        return text[:40]
+
+    async def _handle_picpool(self, group_id: int, parsed: dict):
+        """`/图池`（查看）/ `/图池 补货`（抓一篇，管理员）——被动响应，任何群可用"""
+        args = (parsed.get("content") or "").replace("/图池", "").replace("/picpool", "").strip()
+        if args in ("补货", "refill", "抓图"):
+            if str(parsed.get("user_id") or "") != str(Config.ADMIN_QQ):
+                await self._send_group(group_id, "图池补货只有管理员能触发哦～")
+                return
+            await self._send_group(group_id, "🛠 正在补货（抓 1 篇专栏正文图，可能要十几秒，B站会限流）…")
+            try:
+                await self.news.refresh()
+            except Exception as e:
+                logger.warning(f"[PicPool] 补货前刷新资讯失败: {e}")
+            res = await self.pic_pool.harvest(
+                self.news.all_items(), limit=Config.PIC_POOL_ARTICLES_PER_RUN)
+            st = self.pic_pool.stats()
+            if not res.get("ok"):
+                await self._send_group(group_id, f"⚠️ 补货失败（池子没动）：{res.get('error')}")
+                return
+            await self._send_group(
+                group_id,
+                (f"✅ 补货完成：新增 {res['added']} 张 / {res['articles']} 篇\n"
+                 f"图池：共 {st['total']} 张，已发 {st['used']}，剩 {st['remaining']}，占 {st['disk_mb']}MB")
+                if res["added"] else
+                f"这次没有新增（{res.get('reason') or '没有新专栏可抓'}），池子 {st['total']} 张")
+            return
+
+        st = self.pic_pool.stats()
+        nxt = self.pic_pool.peek_next()
+        order_cn = "随机（一轮不重复、避开上一篇）" if st.get("order") == "random" else "按入库顺序"
+        lines = [
+            "🖼 图池状态",
+            f"共 {st['total']} 张 / 已发 {st['used']} / 剩 {st['remaining']}（上限 {st['limit']}）",
+            f"占用 {st['disk_mb']}MB ｜ 已抓 {st['harvested']} 篇专栏 ｜ 出图：{order_cn}",
+            f"下一张：{nxt['file'] if nxt else '（池子空了）'}",
+        ]
+        if st["last_error"]:
+            lines.append(f"上次错误：{st['last_error']}")
+        lines.append("补货：/图池 补货（管理员）")
+        await self._send_group(group_id, "\n".join(lines))
 
     # ---------- 【P2c】资讯 / 话题 / 历史回顾 的内容生成 ----------
 

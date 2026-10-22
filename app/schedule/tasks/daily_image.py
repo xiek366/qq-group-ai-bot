@@ -55,12 +55,20 @@ class DailyImageTask(Task):
 
     def __init__(self, service: NewsService,
                  fetcher: Optional[Callable[[str], Awaitable[Optional[Path]]]] = None,
-                 captioned: Optional[Callable[[NewsItem], Awaitable[str]]] = None):
-        """`fetcher` 可注入桩（测试不联网）；**给 None 时走内置下载器**（它才会带正确的 Referer 防盗链）"""
+                 captioned: Optional[Callable[[NewsItem], Awaitable[str]]] = None,
+                 pool=None,
+                 pool_captioned: Optional[Callable[[dict], Awaitable[str]]] = None):
+        """`fetcher` 可注入桩（测试不联网）；**给 None 时走内置下载器**（它才会带正确的 Referer 防盗链）
+
+        `pool`：`PicPool` 实例（P2c-图池）。**池优先**：
+        池里有图就发池图（严格 FIFO），池空/失败才回落"资讯封面图"。
+        """
         super().__init__()
         self.service = service
         self._fetcher = fetcher
         self._captioned = captioned
+        self.pool = pool
+        self._pool_captioned = pool_captioned
         # 【P2c-图鉴分拣】图鉴型 UP（NEWS_GALLERY_MIDS）优先供图，当天没更新回落其它带图条目
         self._prefer_ids = {
             f"bili_{m.strip()}"
@@ -72,6 +80,10 @@ class DailyImageTask(Task):
     async def render(self, ctx: TaskContext) -> list:
         if not Config.NEWS_ENABLED:
             raise TaskSkip("资讯功能已关闭")
+        # ---------- 【P2c-图池】池优先：FIFO 取一张，池空/异常再回落封面图 ----------
+        parts = await self._render_from_pool(ctx)
+        if parts:
+            return parts
         try:
             await self.service.refresh()
         except Exception as e:
@@ -85,7 +97,8 @@ class DailyImageTask(Task):
                 detail = self.service.diagnose()
             except Exception:
                 pass
-            raise TaskSkip("没有带图的新资讯可发（取不到就跳过，不发占位图）" + (f"｜{detail}" if detail else ""))
+            raise TaskSkip("图池为空，且没有带图的新资讯可发（取不到就跳过，不发占位图）"
+                           + (f"｜{detail}" if detail else ""))
 
         try:
             if self._fetcher is not None:
@@ -117,4 +130,47 @@ class DailyImageTask(Task):
         # 干跑（/任务 试跑）不记指纹——不烧图鉴库存，正式执行才标记
         if not ctx.dry_run:
             self.service.mark_pushed(item)
+        return ["\n".join(lines)]
+
+    # ---------- 【P2c-图池】池优先出图 ----------
+
+    async def _render_from_pool(self, ctx: TaskContext) -> list:
+        """池里按 FIFO 取一张发出；池空/取图失败返回 []（交给上层回落封面图）
+
+        ⚠️ **干跑不消耗池子**：`/任务 试跑` 只"看一眼下一张是什么"，不能把图标记成已发。
+        """
+        if self.pool is None or not Config.PIC_POOL_ENABLED:
+            return []
+        try:
+            if ctx.dry_run:
+                st = self.pool.stats()
+                nxt = self.pool.peek_next()
+                if not nxt:
+                    logger.info(f"[PicPool] 干跑：池子为空（{st}）")
+                    return []
+                logger.info(f"[PicPool] 干跑：下一张 = {nxt['file']}（池子 {st['total']} 张 / 剩 {st['remaining']}）")
+                pic = nxt
+            else:
+                pic = self.pool.next_picture()
+        except Exception as e:
+            logger.warning(f"[PicPool] 取图失败（回落封面图）: {e}")
+            return []
+        if not pic:
+            return []
+
+        path = Path(pic["path"])
+        if not path.exists():
+            logger.warning(f"[PicPool] 池图文件缺失 {path}，回落封面图")
+            return []
+
+        caption = ""
+        if self._pool_captioned is not None:
+            try:
+                caption = (await self._pool_captioned(pic) or "").strip()
+            except Exception as e:
+                logger.warning(f"[PicPool] 配文生成失败（发纯图）: {e}")
+        lines = [to_cq_image(path)]
+        if caption:
+            lines.append(caption)
+        logger.info(f"[PicPool] 发池图 {pic['file']}（cv{pic.get('cid', '?')} / {pic.get('w')}x{pic.get('h')}）")
         return ["\n".join(lines)]
